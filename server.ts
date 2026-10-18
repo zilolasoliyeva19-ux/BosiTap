@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 import express, { Request, Response } from 'express';
-import { randomInt, timingSafeEqual } from 'node:crypto';
+import { randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import { createServer as createViteServer } from 'vite';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +20,16 @@ interface AuthSession {
 }
 
 const authSessions = new Map<string, AuthSession>();
+const adminSessions = new Map<string, number>();
+const ADMIN_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
+
+function isAdminRequest(req: Request): boolean {
+  const token = req.get('x-bositap-admin-session') || '';
+  const expiresAt = adminSessions.get(token);
+  if (!token || !expiresAt) return false;
+  if (expiresAt <= Date.now()) { adminSessions.delete(token); return false; }
+  return true;
+}
 const rateBuckets = new Map<string, { count: number; resetAt: number }>();
 const SESSION_TTL_MS = 5 * 60 * 1000;
 const CODE_PATTERN = /^\d{8}$/;
@@ -156,6 +166,44 @@ async function startServer() {
     next();
   });
   app.use(express.json({ limit: '16kb', strict: true }));
+  // Admin access is controlled only by a server-side secret; never ship the password to the client.
+  app.post('/api/admin/login', (req: Request, res: Response) => {
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
+    if (!rateLimit(`admin-login:${ip}`, 8, 15 * 60 * 1000)) return res.status(429).json({ error: 'Juda ko‘p urinish. 15 daqiqadan keyin qayta urinib ko‘ring.' });
+    const configured = env('ADMIN_PASSWORD');
+    const submitted = typeof req.body?.password === 'string' ? req.body.password : '';
+    if (!configured || configured.length < 12) return res.status(503).json({ error: 'Admin panel sozlanmagan. Railway’da kamida 12 belgili ADMIN_PASSWORD kiriting.' });
+    if (!submitted || !safeEqual(submitted, configured)) return res.status(401).json({ error: 'Parol noto‘g‘ri.' });
+    const token = randomBytes(32).toString('hex');
+    adminSessions.set(token, Date.now() + ADMIN_SESSION_TTL_MS);
+    res.set('Cache-Control', 'no-store');
+    return res.json({ ok: true, token, expiresIn: ADMIN_SESSION_TTL_MS });
+  });
+
+  app.get('/api/admin/session', (req: Request, res: Response) => {
+    res.set('Cache-Control', 'no-store');
+    return res.json({ authenticated: isAdminRequest(req) });
+  });
+
+  app.post('/api/admin/logout', (req: Request, res: Response) => {
+    const token = req.get('x-bositap-admin-session') || '';
+    if (token) adminSessions.delete(token);
+    return res.json({ ok: true });
+  });
+
+  app.get('/api/admin/overview', (req: Request, res: Response) => {
+    if (!isAdminRequest(req)) return res.status(401).json({ error: 'Admin login talab qilinadi.' });
+    res.set('Cache-Control', 'no-store');
+    return res.json({
+      service: 'BosiTap',
+      serverTime: new Date().toISOString(),
+      telegramConfigured: telegramConfigured(),
+      telegramBotUsername: normalizedBotUsername(),
+      activeTelegramAuthSessions: authSessions.size,
+      note: 'Global player totals and cross-device leaderboard require a persistent database; these metrics are not fabricated.',
+    });
+  });
+
 
   app.get('/api/telegram/bot-info', (_req: Request, res: Response) => {
     res.set('Cache-Control', 'no-store');

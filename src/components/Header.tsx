@@ -8,6 +8,7 @@ import { Volume2, VolumeX, Settings, Sparkles, Zap, Sun, Moon, User } from 'luci
 import { useGame, TabType } from '../context/GameContext';
 import { translations } from '../localization/translations';
 import { Logo } from './Logo';
+import { NotificationsCenter } from './NotificationsCenter';
 
 const AVATAR_COLORS: Record<string, string> = {
   avatar_1: 'bg-emerald-600',
@@ -103,6 +104,8 @@ export function Header() {
               <span className="sm:hidden">2x</span>
             </button>
           ) : null}
+
+          <NotificationsCenter />
 
           {/* Dark Mode / Light Mode Toggle */}
           <button
