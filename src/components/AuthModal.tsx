@@ -65,7 +65,20 @@ export function AuthModal() {
 
   const isInitialSetup = !state.profile;
 
-  const handleTelegramLogin = async () => {\n    setTelegramLoading(true);\n    setError(null);\n    try {\n      const session = await telegramService.createAuthSession();\n      setTelegramSession(session);\n    } catch (err) {\n      setError(err instanceof Error ? err.message : 'Telegram bilan ulanishda xatolik.');\n    } finally {\n      setTelegramLoading(false);\n    }\n  };\n\n  const handleSubmit = (e: React.FormEvent) => {
+  const handleTelegramLogin = async () => {
+    setTelegramLoading(true);
+    setError(null);
+    try {
+      const session = await telegramService.createAuthSession();
+      setTelegramSession(session);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Telegram bilan ulanishda xatolik.');
+    } finally {
+      setTelegramLoading(false);
+    }
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const cleanName = name.trim();
     const cleanUsername = username.trim().replace(/^@/, '');
