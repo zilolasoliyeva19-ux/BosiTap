@@ -70,7 +70,7 @@ async function telegramApi(method: string, body: Record<string, unknown>): Promi
 
 async function sendTelegramMessage(chatId: number, text: string, webAppUrl?: string): Promise<void> {
   const replyMarkup = webAppUrl && /^https:\/\//i.test(webAppUrl)
-    ? { inline_keyboard: [[{ text: '🕹 BosiTap ni ochish', web_app: { url: webAppUrl } }]] }
+    ? { inline_keyboard: [[{ text: '🕹 BosiTap ni ochish', url: webAppUrl }]] }
     : undefined;
   try {
     await telegramApi('sendMessage', {
