@@ -87,10 +87,10 @@ async function sendTelegramMessage(chatId: number, text: string, webAppUrl?: str
 }
 
 async function configureWebhook(): Promise<void> {
-  const appUrl = env('APP_URL').replace(/\/+$/, '');
+  const apiUrl = env('API_URL').replace(/\/+$/, '');
   const secret = env('TELEGRAM_WEBHOOK_SECRET');
-  if (!env('TELEGRAM_BOT_TOKEN') || !appUrl || !secret) {
-    console.warn('Telegram webhook not configured: set TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET and APP_URL.');
+  if (!env('TELEGRAM_BOT_TOKEN') || !apiUrl || !secret) {
+    console.warn('Telegram webhook not configured: set TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET and API_URL.');
     return;
   }
   if (!/^[A-Za-z0-9_-]{1,256}$/.test(secret)) {
@@ -99,7 +99,7 @@ async function configureWebhook(): Promise<void> {
   }
   try {
     await telegramApi('setWebhook', {
-      url: `${appUrl}/api/telegram/webhook`,
+      url: `${apiUrl}/api/telegram/webhook`,
       secret_token: secret,
       allowed_updates: ['message'],
     });
@@ -133,6 +133,27 @@ async function startServer() {
   const isProduction = process.env.NODE_ENV === 'production';
 
   app.disable('x-powered-by');
+
+  // Allow the Vercel frontend to call this Railway-hosted API.
+  const allowedOrigins = new Set([
+    env('APP_URL').replace(/\/+$/, ''),
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+  ].filter(Boolean));
+  app.use((req: Request, res: Response, next) => {
+    const origin = req.get('origin');
+    if (origin && allowedOrigins.has(origin)) {
+      res.set('Access-Control-Allow-Origin', origin);
+      res.set('Vary', 'Origin');
+      res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.set('Access-Control-Allow-Headers', 'Content-Type');
+    }
+    if (req.method === 'OPTIONS') {
+      if (origin && !allowedOrigins.has(origin)) return res.status(403).end();
+      return res.status(204).end();
+    }
+    next();
+  });
   app.use(express.json({ limit: '16kb', strict: true }));
 
   app.get('/api/telegram/bot-info', (_req: Request, res: Response) => {
