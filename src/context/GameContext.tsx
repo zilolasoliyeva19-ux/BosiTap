@@ -77,7 +77,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
       if (requestedTab === 'home' || requestedTab === 'upgrades' || requestedTab === 'daily' || requestedTab === 'stats' || requestedTab === 'leaderboard' || requestedTab === 'settings') return requestedTab;
     }
     return 'home';
-  });\n      if (requestedTab === 'home' || requestedTab === 'upgrades' || requestedTab === 'daily' || requestedTab === 'stats' || requestedTab === 'leaderboard' || requestedTab === 'settings') return requestedTab;\n    }\n    return 'home';\n  });
+  });
   const [floatingTexts, setFloatingTexts] = useState<FloatingTextItem[]>([]);
   const [offlineReport, setOfflineReport] = useState<OfflineReport | null>(null);
   const [levelUpNotification, setLevelUpNotification] = useState<number | null>(null);
