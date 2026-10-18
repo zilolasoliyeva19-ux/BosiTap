@@ -16,6 +16,7 @@ import { LeaderboardPage } from './pages/LeaderboardPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { StatsPage } from './pages/StatsPage';
 import { UpgradesPage } from './pages/UpgradesPage';
+import { AdminPage } from './pages/AdminPage';
 
 function AppContent() {
   const { activeTab, floatingTexts } = useGame();
@@ -65,6 +66,7 @@ function AppContent() {
 }
 
 export default function App() {
+  if (typeof window !== 'undefined' && window.location.pathname.replace(/\\/+$/, '') === '/admin') return <AdminPage />;
   return (
     <GameProvider>
       <AppContent />
