@@ -44,6 +44,11 @@ export interface TelegramAuthSession {
 
 class TelegramService {
   private botUsername: string = 'BosiTapBot';
+  private readonly apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
+
+  private apiUrl(path: string): string {
+    return `${this.apiBaseUrl}${path}`;
+  }
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -132,7 +137,7 @@ class TelegramService {
    * Create an auth session code for browser users
    */
   public async createAuthSession(): Promise<TelegramAuthSession> {
-    const res = await fetch('/api/telegram/create-auth-session', {
+    const res = await fetch(this.apiUrl('/api/telegram/create-auth-session'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
     });
@@ -149,7 +154,7 @@ class TelegramService {
   public async checkAuthSession(code: string): Promise<{ status: 'pending' | 'verified'; telegramUser?: UserProfile } | null> {
     if (!/^\d{8}$/.test(code)) return null;
     try {
-      const res = await fetch(`/api/telegram/check-auth-session/${encodeURIComponent(code)}`, {
+      const res = await fetch(this.apiUrl(`/api/telegram/check-auth-session/${encodeURIComponent(code)}`), {
         headers: { Accept: 'application/json' },
         cache: 'no-store',
       });
@@ -190,7 +195,7 @@ class TelegramService {
    */
   public async testBotToken(_token: string): Promise<{ ok: boolean; botName?: string; username?: string; error?: string }> {
     try {
-      const res = await fetch('/api/telegram/bot-info', { cache: 'no-store' });
+      const res = await fetch(this.apiUrl('/api/telegram/bot-info'), { cache: 'no-store' });
       const data = await res.json();
       if (!res.ok || !data.isConfigured) {
         return { ok: false, error: 'Bot tokenini serverdagi Secrets / Environment Variables bo‘limiga joylang.' };
