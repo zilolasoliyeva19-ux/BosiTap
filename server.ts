@@ -64,15 +64,13 @@ async function telegramApi(method: string, body: Record<string, unknown>): Promi
     signal: AbortSignal.timeout(8000),
   });
   const data = await response.json() as { ok?: boolean; description?: string };
-  if (!response.ok || !data.ok) {
-    throw new Error(data.description || `Telegram API request failed: ${method}`);
-  }
+  if (!response.ok || !data.ok) throw new Error(data.description || `Telegram API request failed: ${method}`);
   return data;
 }
 
 async function sendTelegramMessage(chatId: number, text: string, webAppUrl?: string): Promise<void> {
   const replyMarkup = webAppUrl && /^https:\/\//i.test(webAppUrl)
-    ? { inline_keyboard: [[{ text: '🕹 BosiTap ni ochish', web_app: { url: webAppUrl } }]] }
+    ? { inline_keyboard: [[{ text: '🕹 BosiTap ni ochish', url: webAppUrl }]] }
     : undefined;
   try {
     await telegramApi('sendMessage', {
@@ -81,7 +79,6 @@ async function sendTelegramMessage(chatId: number, text: string, webAppUrl?: str
       ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
     });
   } catch (error) {
-    // Never log bot tokens or user-supplied Telegram data.
     console.error('Telegram sendMessage failed:', error instanceof Error ? error.message : 'unknown error');
   }
 }
@@ -107,24 +104,29 @@ async function configureWebhook(): Promise<void> {
       commands: [
         { command: 'start', description: 'BosiTap ni boshlash yoki hisobni ulash' },
         { command: 'play', description: 'O‘yinni ochish' },
+        { command: 'top', description: 'TOP reyting sahifasini ochish' },
         { command: 'help', description: 'Yordam va buyruqlar' },
       ],
     });
-    console.log('Telegram webhook configured.');
+    await telegramApi('setMyCommands', {
+      scope: { type: 'all_group_chats' },
+      commands: [
+        { command: 'play', description: 'BosiTap o‘yinini ochish' },
+        { command: 'top', description: 'TOP reytingni ko‘rish' },
+        { command: 'grouphelp', description: 'Guruhda botni sozlash bo‘yicha yordam' },
+        { command: 'help', description: 'Bot buyruqlari' },
+      ],
+    });
+    console.log('Telegram webhook and group commands configured.');
   } catch (error) {
     console.error('Telegram webhook setup failed:', error instanceof Error ? error.message : 'unknown error');
   }
 }
 
-// Expired sessions and rate-limit buckets are kept short-lived.
 setInterval(() => {
   const now = Date.now();
-  for (const [code, session] of authSessions) {
-    if (session.expiresAt <= now) authSessions.delete(code);
-  }
-  for (const [key, bucket] of rateBuckets) {
-    if (bucket.resetAt <= now) rateBuckets.delete(key);
-  }
+  for (const [code, session] of authSessions) if (session.expiresAt <= now) authSessions.delete(code);
+  for (const [key, bucket] of rateBuckets) if (bucket.resetAt <= now) rateBuckets.delete(key);
 }, 60_000).unref();
 
 async function startServer() {
@@ -134,7 +136,6 @@ async function startServer() {
 
   app.disable('x-powered-by');
 
-  // Allow the Vercel frontend to call this Railway-hosted API.
   const allowedOrigins = new Set([
     env('APP_URL').replace(/\/+$/, ''),
     'http://localhost:5173',
@@ -164,7 +165,7 @@ async function startServer() {
       isConfigured: telegramConfigured(),
       status: telegramConfigured() ? 'active' : 'offline',
       miniAppUrl: env('APP_URL'),
-      features: ['telegram_login', 'mini_app', 'help'],
+      features: ['telegram_login', 'mini_app', 'group_commands', 'top_link'],
     });
   });
 
@@ -176,8 +177,6 @@ async function startServer() {
     if (!telegramConfigured()) {
       return res.status(503).json({ error: 'Telegram login sozlanmagan. Server environment variables qiymatlarini tekshiring.' });
     }
-
-    // Eight-digit, short-lived, one-use codes reduce guessing risk.
     let code = String(randomInt(10_000_000, 100_000_000));
     while (authSessions.has(code)) code = String(randomInt(10_000_000, 100_000_000));
     const now = Date.now();
@@ -191,12 +190,9 @@ async function startServer() {
     });
   });
 
-  // Only Telegram's authenticated webhook may verify a session. Browser clients cannot submit identities.
   app.get('/api/telegram/check-auth-session/:code', (req: Request, res: Response) => {
     const ip = req.ip || req.socket.remoteAddress || 'unknown';
-    if (!rateLimit(`check:${ip}`, 90, 60_000)) {
-      return res.status(429).json({ error: 'Juda ko‘p so‘rov.' });
-    }
+    if (!rateLimit(`check:${ip}`, 90, 60_000)) return res.status(429).json({ error: 'Juda ko‘p so‘rov.' });
     const { code } = req.params;
     if (!CODE_PATTERN.test(code)) return res.status(400).json({ error: 'Kod formati noto‘g‘ri.' });
     const session = authSessions.get(code);
@@ -204,13 +200,10 @@ async function startServer() {
       if (session) authSessions.delete(code);
       return res.status(404).json({ error: 'Sessiya topilmadi yoki muddati tugagan.' });
     }
-
     res.set('Cache-Control', 'no-store');
     if (session.status !== 'verified' || !session.telegramUser) {
       return res.json({ code, status: 'pending', telegramUser: null });
     }
-
-    // Consume a verified session on first successful read.
     const telegramUser = session.telegramUser;
     authSessions.delete(code);
     return res.json({ code, status: 'verified', telegramUser });
@@ -231,9 +224,12 @@ async function startServer() {
     }
 
     const chatId = message.chat.id as number;
+    const chatType = String(message.chat.type || 'private');
     const from = message.from;
     const text = typeof message.text === 'string' ? message.text.trim() : '';
     const startMatch = text.match(/^\/start(?:@\w+)?(?:\s+auth_(\d{8}))?$/i);
+    const command = text.split(/\s+/)[0].replace(/@\w+$/, '').toLowerCase();
+    const appUrl = env('APP_URL');
 
     if (startMatch?.[1]) {
       const code = startMatch[1];
@@ -254,30 +250,31 @@ async function startServer() {
       return res.json({ ok: true });
     }
 
-    if (startMatch || /^\/play(?:@\w+)?$/i.test(text)) {
-      const appUrl = env('APP_URL');
-      await sendTelegramMessage(
-        chatId,
+    if (command === '/grouphelp' && chatType !== 'private') {
+      await sendTelegramMessage(chatId,
+        '🛡 BosiTap guruh yordami\n\n1. Botni guruhga qo‘shing.\n2. Guruh sozlamalari → Administratorlar → Administrator qo‘shish orqali botga kerakli ruxsatlarni bering.\n3. Oddiy o‘yin havolasi uchun /play, reyting sahifasiga o‘tish uchun /top yozing.\n\nEslatma: bot o‘zini o‘zi admin qila olmaydi — buni guruh egasi yoki admin bajaradi.');
+    } else if (command === '/top') {
+      await sendTelegramMessage(chatId,
+        '🏆 BosiTap TOP reyting sahifasini oching. Global reyting natijalari barcha qurilmalarda bir xil bo‘lishi uchun doimiy reyting bazasi kerak; hozircha bu bot sahifaga havola beradi.',
+        `${appUrl.replace(/\/+$/, '')}?tab=leaderboard`);
+    } else if (command === '/start' || command === '/play') {
+      await sendTelegramMessage(chatId,
         '👋 Assalomu alaykum! BosiTap — Bits yig‘ish va yangilanishlar ochish o‘yini. O‘yinni ochish uchun tugmani bosing. Hisobni ulash uchun saytda Telegram orqali kirishni tanlang.',
-        appUrl,
-      );
-    } else if (/^\/help(?:@\w+)?$/i.test(text)) {
-      await sendTelegramMessage(chatId, 'BosiTap buyruqlari:\n/start — boshlash yoki hisobni ulash\n/play — o‘yinni ochish\n/help — yordam', env('APP_URL'));
+        appUrl);
+    } else if (command === '/help') {
+      await sendTelegramMessage(chatId,
+        '🤖 BosiTap buyruqlari:\n/start — botni boshlash yoki hisobni ulash\n/play — o‘yinni ochish\n/top — TOP reyting sahifasi\n/grouphelp — guruh sozlamalari bo‘yicha yordam\n/help — yordam',
+        appUrl);
     }
     return res.json({ ok: true });
   });
 
   if (!isProduction) {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
+    const vite = await createViteServer({ server: { middlewareMode: true }, appType: 'spa' });
     app.use(vite.middlewares);
   } else {
     app.use(express.static(path.resolve(__dirname, 'dist')));
-    app.get('*', (_req: Request, res: Response) => {
-      res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
-    });
+    app.get('*', (_req: Request, res: Response) => res.sendFile(path.resolve(__dirname, 'dist', 'index.html')));
   }
 
   app.listen(PORT, '0.0.0.0', () => {

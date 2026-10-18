@@ -345,10 +345,10 @@ export function LeaderboardPage() {
         <Shield className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
         <div>
           <h4 className="text-xs font-bold text-[#111111] dark:text-white">
-            {t.leaderboard.realPlayersOnlyTitle}
+            Shaxsiy rekordlar va ligalar
           </h4>
           <p className="text-xs text-[#777777] dark:text-[#94A3B8] mt-0.5 leading-relaxed">
-            {t.leaderboard.realPlayersOnlyDesc}
+            Bu sahifadagi Bits, bosishlar va ligalar hozircha ushbu brauzerda saqlangan profilingizdan olinadi. Barcha o‘yinchilar uchun haqiqiy global TOP reytingni yoqish uchun doimiy server bazasini ulash kerak.
           </p>
         </div>
       </div>
