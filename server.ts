@@ -256,7 +256,7 @@ async function startServer() {
     } else if (command === '/top') {
       await sendTelegramMessage(chatId,
         '🏆 BosiTap TOP reyting sahifasini oching. Global reyting natijalari barcha qurilmalarda bir xil bo‘lishi uchun doimiy reyting bazasi kerak; hozircha bu bot sahifaga havola beradi.',
-        appUrl);
+        `${appUrl.replace(/\/+$/, '')}?tab=leaderboard`);
     } else if (command === '/start' || command === '/play') {
       await sendTelegramMessage(chatId,
         '👋 Assalomu alaykum! BosiTap — Bits yig‘ish va yangilanishlar ochish o‘yini. O‘yinni ochish uchun tugmani bosing. Hisobni ulash uchun saytda Telegram orqali kirishni tanlang.',
