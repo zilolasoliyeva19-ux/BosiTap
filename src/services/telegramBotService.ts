@@ -43,12 +43,12 @@ export interface TelegramAuthSession {
 }
 
 class TelegramService {
-  private customBotToken: string = '';
   private botUsername: string = 'BosiTapBot';
 
   constructor() {
     if (typeof window !== 'undefined') {
-      this.customBotToken = localStorage.getItem('bositap_custom_bot_token') || '';
+      // Bot tokens must never be stored in browser storage.
+      localStorage.removeItem('bositap_custom_bot_token');
       this.botUsername = localStorage.getItem('bositap_bot_username') || 'BosiTapBot';
     }
   }
@@ -118,169 +118,90 @@ class TelegramService {
     }
   }
 
+  /** Tokens are server-side secrets and are intentionally unavailable to browser code. */
   public getCustomBotToken(): string {
-    return this.customBotToken;
+    return '';
   }
 
-  public setCustomBotToken(token: string) {
-    this.customBotToken = token.trim();
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('bositap_custom_bot_token', this.customBotToken);
-    }
+  /** Intentionally does not persist bot tokens in the browser. */
+  public setCustomBotToken(_token: string) {
+    if (typeof window !== 'undefined') localStorage.removeItem('bositap_custom_bot_token');
   }
 
   /**
    * Create an auth session code for browser users
    */
   public async createAuthSession(): Promise<TelegramAuthSession> {
-    try {
-      const res = await fetch('/api/telegram/create-auth-session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      });
-      if (res.ok) {
-        return await res.json();
-      }
-    } catch {
-      // Fallback for standalone/offline preview
+    const res = await fetch('/api/telegram/create-auth-session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.error || 'Telegram orqali ulanishni boshlash imkonsiz.');
     }
-
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = Date.now() + 10 * 60 * 1000;
-    const session: TelegramAuthSession = {
-      code,
-      expiresAt,
-      botUsername: this.botUsername,
-      deepLink: `https://t.me/${this.botUsername}?start=auth_${code}`,
-    };
-    if (typeof window !== 'undefined') {
-      sessionStorage.setItem(`bositap_auth_session_${code}`, JSON.stringify(session));
-    }
-    return session;
+    return data as TelegramAuthSession;
   }
 
   /**
    * Check status of auth session
    */
   public async checkAuthSession(code: string): Promise<{ status: 'pending' | 'verified'; telegramUser?: UserProfile } | null> {
+    if (!/^\\d{8}$/.test(code)) return null;
     try {
-      const res = await fetch(`/api/telegram/check-auth-session/${code}`);
-      if (res.ok) {
-        const data = await res.json();
-        if (data.status === 'verified' && data.telegramUser) {
-          return {
-            status: 'verified',
-            telegramUser: {
-              name: data.telegramUser.name,
-              username: data.telegramUser.username,
-              avatarId: 'avatar_1',
-              createdAt: Date.now(),
-              telegramId: data.telegramUser.id,
-              isTelegramLinked: true,
-              telegramPhotoUrl: data.telegramUser.photoUrl,
-            },
-          };
-        }
-        return { status: data.status };
+      const res = await fetch(`/api/telegram/check-auth-session/${encodeURIComponent(code)}`, {
+        headers: { Accept: 'application/json' },
+        cache: 'no-store',
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      if (data.status === 'verified' && data.telegramUser) {
+        return {
+          status: 'verified',
+          telegramUser: {
+            name: data.telegramUser.name,
+            username: data.telegramUser.username,
+            avatarId: 'avatar_1',
+            createdAt: Date.now(),
+            telegramId: data.telegramUser.id,
+            isTelegramLinked: true,
+            telegramPhotoUrl: data.telegramUser.photoUrl,
+          },
+        };
       }
+      return { status: 'pending' };
     } catch {
-      // Fallback check
+      return null;
     }
-
-    if (typeof window !== 'undefined') {
-      const stored = sessionStorage.getItem(`bositap_auth_session_${code}_verified`);
-      if (stored) {
-        try {
-          return { status: 'verified', telegramUser: JSON.parse(stored) };
-        } catch {}
-      }
-    }
-    return { status: 'pending' };
   }
 
   /**
    * Simulate or verify an auth code immediately
    */
-  public async verifyAuthCodeLocally(
-    code: string,
-    profileInfo?: { name: string; username: string; id?: number }
-  ): Promise<UserProfile> {
-    const defaultId = Math.floor(100000000 + Math.random() * 900000000);
-    const tgProfile: UserProfile = {
-      name: profileInfo?.name || 'Telegram Foydalanuvchisi',
-      username: profileInfo?.username || 'telegram_user',
-      avatarId: 'avatar_1',
-      createdAt: Date.now(),
-      telegramId: profileInfo?.id || defaultId,
-      isTelegramLinked: true,
-    };
-
-    try {
-      await fetch('/api/telegram/verify-auth-session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          code,
-          telegramUser: {
-            id: tgProfile.telegramId,
-            name: tgProfile.name,
-            username: tgProfile.username,
-          },
-        }),
-      });
-    } catch {
-      // Ignored if API is unavailable
-    }
-
-    if (typeof window !== 'undefined') {
-      sessionStorage.setItem(`bositap_auth_session_${code}_verified`, JSON.stringify(tgProfile));
-    }
-
-    return tgProfile;
+  /**
+   * Wait for the server to confirm the Telegram webhook session.
+   * The browser is never allowed to manufacture a verified Telegram identity.
+   */
+  public async verifyAuthCodeLocally(code: string): Promise<UserProfile> {
+    const result = await this.checkAuthSession(code);
+    if (result?.status === 'verified' && result.telegramUser) return result.telegramUser;
+    throw new Error('Telegram hisobingiz hali tasdiqlanmadi. Botdagi ulanishni yakunlang va qayta urinib ko‘ring.');
   }
 
   /**
-   * Test a Telegram Bot token with Telegram official API
+   * Check server-side bot configuration without ever sending a token from the browser.
    */
-  public async testBotToken(token: string): Promise<{ ok: boolean; botName?: string; username?: string; error?: string }> {
+  public async testBotToken(_token: string): Promise<{ ok: boolean; botName?: string; username?: string; error?: string }> {
     try {
-      // First try via our backend proxy
-      const res = await fetch('/api/telegram/test-bot-token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.ok && data.bot) {
-          this.setBotUsername(data.bot.username);
-          this.setCustomBotToken(token);
-          return {
-            ok: true,
-            botName: data.bot.first_name,
-            username: data.bot.username,
-          };
-        }
+      const res = await fetch('/api/telegram/bot-info', { cache: 'no-store' });
+      const data = await res.json();
+      if (!res.ok || !data.isConfigured) {
+        return { ok: false, error: 'Bot tokenini serverdagi Secrets / Environment Variables bo‘limiga joylang.' };
       }
+      this.setBotUsername(data.botUsername);
+      return { ok: true, botName: data.botName, username: data.botUsername };
     } catch {
-      // Direct call fallback
-    }
-
-    try {
-      const directRes = await fetch(`https://api.telegram.org/bot${token}/getMe`);
-      const directData = await directRes.json();
-      if (directData.ok && directData.result) {
-        this.setBotUsername(directData.result.username);
-        this.setCustomBotToken(token);
-        return {
-          ok: true,
-          botName: directData.result.first_name,
-          username: directData.result.username,
-        };
-      }
-      return { ok: false, error: directData.description || 'Noto\'g\'ri token' };
-    } catch (err: any) {
-      return { ok: false, error: err.message || 'Telegram serveriga ulanib bo\'lmadi' };
+      return { ok: false, error: 'Serverdagi Telegram sozlamalarini tekshirib bo‘lmadi.' };
     }
   }
 
