@@ -2,11 +2,11 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  */
-
 import express, { Request, Response } from 'express';
+import { randomInt, timingSafeEqual } from 'node:crypto';
 import { createServer as createViteServer } from 'vite';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -14,156 +14,238 @@ const __dirname = path.dirname(__filename);
 interface AuthSession {
   code: string;
   status: 'pending' | 'verified';
-  telegramUser?: {
-    id: number;
-    name: string;
-    username: string;
-    photoUrl?: string;
-  };
+  telegramUser?: { id: number; name: string; username: string; photoUrl?: string };
   createdAt: number;
   expiresAt: number;
 }
 
 const authSessions = new Map<string, AuthSession>();
+const rateBuckets = new Map<string, { count: number; resetAt: number }>();
+const SESSION_TTL_MS = 5 * 60 * 1000;
+const CODE_PATTERN = /^\d{8}$/;
 
-// Cleanup expired sessions
+function env(name: string): string {
+  return (process.env[name] || '').trim();
+}
+
+function normalizedBotUsername(): string {
+  return env('TELEGRAM_BOT_USERNAME').replace(/^@/, '');
+}
+
+function telegramConfigured(): boolean {
+  return Boolean(env('TELEGRAM_BOT_TOKEN') && normalizedBotUsername() && env('TELEGRAM_WEBHOOK_SECRET'));
+}
+
+function safeEqual(a: string, b: string): boolean {
+  const left = Buffer.from(a);
+  const right = Buffer.from(b);
+  return left.length === right.length && timingSafeEqual(left, right);
+}
+
+function rateLimit(key: string, limit: number, windowMs: number): boolean {
+  const now = Date.now();
+  const current = rateBuckets.get(key);
+  if (!current || current.resetAt <= now) {
+    rateBuckets.set(key, { count: 1, resetAt: now + windowMs });
+    return true;
+  }
+  if (current.count >= limit) return false;
+  current.count += 1;
+  return true;
+}
+
+async function telegramApi(method: string, body: Record<string, unknown>): Promise<any> {
+  const token = env('TELEGRAM_BOT_TOKEN');
+  if (!token) throw new Error('Telegram bot is not configured');
+  const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(8000),
+  });
+  const data = await response.json() as { ok?: boolean; description?: string };
+  if (!response.ok || !data.ok) {
+    throw new Error(data.description || `Telegram API request failed: ${method}`);
+  }
+  return data;
+}
+
+async function sendTelegramMessage(chatId: number, text: string, webAppUrl?: string): Promise<void> {
+  const replyMarkup = webAppUrl && /^https:\/\//i.test(webAppUrl)
+    ? { inline_keyboard: [[{ text: '🕹 BosiTap ni ochish', web_app: { url: webAppUrl } }]] }
+    : undefined;
+  try {
+    await telegramApi('sendMessage', {
+      chat_id: chatId,
+      text,
+      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+    });
+  } catch (error) {
+    // Never log bot tokens or user-supplied Telegram data.
+    console.error('Telegram sendMessage failed:', error instanceof Error ? error.message : 'unknown error');
+  }
+}
+
+async function configureWebhook(): Promise<void> {
+  const appUrl = env('APP_URL').replace(/\/+$/, '');
+  const secret = env('TELEGRAM_WEBHOOK_SECRET');
+  if (!env('TELEGRAM_BOT_TOKEN') || !appUrl || !secret) {
+    console.warn('Telegram webhook not configured: set TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET and APP_URL.');
+    return;
+  }
+  if (!/^[A-Za-z0-9_-]{1,256}$/.test(secret)) {
+    console.error('Telegram webhook not configured: TELEGRAM_WEBHOOK_SECRET must use only letters, numbers, _ or -.');
+    return;
+  }
+  try {
+    await telegramApi('setWebhook', {
+      url: `${appUrl}/api/telegram/webhook`,
+      secret_token: secret,
+      allowed_updates: ['message'],
+    });
+    await telegramApi('setMyCommands', {
+      commands: [
+        { command: 'start', description: 'BosiTap ni boshlash yoki hisobni ulash' },
+        { command: 'play', description: 'O‘yinni ochish' },
+        { command: 'help', description: 'Yordam va buyruqlar' },
+      ],
+    });
+    console.log('Telegram webhook configured.');
+  } catch (error) {
+    console.error('Telegram webhook setup failed:', error instanceof Error ? error.message : 'unknown error');
+  }
+}
+
+// Expired sessions and rate-limit buckets are kept short-lived.
 setInterval(() => {
   const now = Date.now();
-  for (const [code, session] of authSessions.entries()) {
-    if (session.expiresAt < now) {
-      authSessions.delete(code);
-    }
+  for (const [code, session] of authSessions) {
+    if (session.expiresAt <= now) authSessions.delete(code);
   }
-}, 60000);
+  for (const [key, bucket] of rateBuckets) {
+    if (bucket.resetAt <= now) rateBuckets.delete(key);
+  }
+}, 60_000).unref();
 
 async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
   const isProduction = process.env.NODE_ENV === 'production';
 
-  app.use(express.json());
+  app.disable('x-powered-by');
+  app.use(express.json({ limit: '16kb', strict: true }));
 
-  // Get Telegram Bot Info
-  app.get('/api/telegram/bot-info', (req: Request, res: Response) => {
+  app.get('/api/telegram/bot-info', (_req: Request, res: Response) => {
+    res.set('Cache-Control', 'no-store');
     res.json({
       botName: 'BosiTap Bot',
-      botUsername: process.env.TELEGRAM_BOT_USERNAME || 'BosiTapBot',
-      isConfigured: Boolean(process.env.TELEGRAM_BOT_TOKEN),
-      status: 'active',
-      miniAppUrl: process.env.APP_URL || 'https://bositap.app',
-      features: ['auth', 'play_webapp', 'balance_check', 'daily_reminder'],
+      botUsername: normalizedBotUsername(),
+      isConfigured: telegramConfigured(),
+      status: telegramConfigured() ? 'active' : 'offline',
+      miniAppUrl: env('APP_URL'),
+      features: ['telegram_login', 'mini_app', 'help'],
     });
   });
 
-  // Create one-time 6-digit auth session for web login
   app.post('/api/telegram/create-auth-session', (req: Request, res: Response) => {
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
+    if (!rateLimit(`create:${ip}`, 5, 15 * 60 * 1000)) {
+      return res.status(429).json({ error: 'Juda ko‘p urinish. Birozdan keyin qayta urinib ko‘ring.' });
+    }
+    if (!telegramConfigured()) {
+      return res.status(503).json({ error: 'Telegram login sozlanmagan. Server environment variables qiymatlarini tekshiring.' });
+    }
+
+    // Eight-digit, short-lived, one-use codes reduce guessing risk.
+    let code = String(randomInt(10_000_000, 100_000_000));
+    while (authSessions.has(code)) code = String(randomInt(10_000_000, 100_000_000));
     const now = Date.now();
-    const botUser = process.env.TELEGRAM_BOT_USERNAME || 'BosiTapBot';
-    const session: AuthSession = {
+    authSessions.set(code, { code, status: 'pending', createdAt: now, expiresAt: now + SESSION_TTL_MS });
+    res.set('Cache-Control', 'no-store');
+    return res.json({
       code,
-      status: 'pending',
-      createdAt: now,
-      expiresAt: now + 10 * 60 * 1000,
-    };
-    authSessions.set(code, session);
-    res.json({
-      code,
-      expiresAt: session.expiresAt,
-      botUsername: botUser,
-      deepLink: `https://t.me/${botUser}?start=auth_${code}`,
+      expiresAt: now + SESSION_TTL_MS,
+      botUsername: normalizedBotUsername(),
+      deepLink: `https://t.me/${normalizedBotUsername()}?start=auth_${code}`,
     });
   });
 
-  // Verify auth session
-  app.post('/api/telegram/verify-auth-session', (req: Request, res: Response) => {
-    const { code, telegramUser } = req.body;
-    if (!code) {
-      return res.status(400).json({ error: 'Kod talab qilinadi' });
-    }
-    const session = authSessions.get(code);
-    if (!session) {
-      return res.status(404).json({ error: 'Ulanish kodi topilmadi yoki muddati o\'tgan' });
-    }
-    if (session.expiresAt < Date.now()) {
-      authSessions.delete(code);
-      return res.status(410).json({ error: 'Kod muddati tugagan' });
-    }
-
-    session.status = 'verified';
-    session.telegramUser = telegramUser || {
-      id: Math.floor(100000000 + Math.random() * 900000000),
-      name: 'BosiTap Foydalanuvchisi',
-      username: 'bositap_user',
-    };
-
-    authSessions.set(code, session);
-    res.json({ success: true, session });
-  });
-
-  // Check auth session status
+  // Only Telegram's authenticated webhook may verify a session. Browser clients cannot submit identities.
   app.get('/api/telegram/check-auth-session/:code', (req: Request, res: Response) => {
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
+    if (!rateLimit(`check:${ip}`, 90, 60_000)) {
+      return res.status(429).json({ error: 'Juda ko‘p so‘rov.' });
+    }
     const { code } = req.params;
+    if (!CODE_PATTERN.test(code)) return res.status(400).json({ error: 'Kod formati noto‘g‘ri.' });
     const session = authSessions.get(code);
-    if (!session) {
-      return res.status(404).json({ error: 'Sessiya topilmadi' });
+    if (!session || session.expiresAt <= Date.now()) {
+      if (session) authSessions.delete(code);
+      return res.status(404).json({ error: 'Sessiya topilmadi yoki muddati tugagan.' });
     }
-    if (session.expiresAt < Date.now()) {
-      authSessions.delete(code);
-      return res.status(410).json({ error: 'Sessiya muddati o\'tgan' });
+
+    res.set('Cache-Control', 'no-store');
+    if (session.status !== 'verified' || !session.telegramUser) {
+      return res.json({ code, status: 'pending', telegramUser: null });
     }
-    res.json({
-      code: session.code,
-      status: session.status,
-      telegramUser: session.telegramUser || null,
-    });
+
+    // Consume a verified session on first successful read.
+    const telegramUser = session.telegramUser;
+    authSessions.delete(code);
+    return res.json({ code, status: 'verified', telegramUser });
   });
 
-  // Test custom Telegram bot token
-  app.post('/api/telegram/test-bot-token', async (req: Request, res: Response) => {
-    const { token } = req.body;
-    if (!token || typeof token !== 'string') {
-      return res.status(400).json({ error: 'Bot tokeni kiritilmadi' });
-    }
-    try {
-      const tgRes = await fetch(`https://api.telegram.org/bot${token}/getMe`);
-      const data = (await tgRes.json()) as any;
-      if (data.ok) {
-        return res.json({ ok: true, bot: data.result });
-      } else {
-        return res.status(400).json({ ok: false, error: data.description || 'Noto\'g\'ri token' });
-      }
-    } catch (err: any) {
-      return res.status(500).json({ ok: false, error: err.message || 'Telegram serveriga ulanishda xatolik' });
-    }
-  });
-
-  // Telegram webhook receiver
   app.post('/api/telegram/webhook', async (req: Request, res: Response) => {
-    const update = req.body;
-    if (update?.message) {
-      const msg = update.message;
-      const text = (msg.text || '').trim();
-      const from = msg.from;
-
-      if (text.startsWith('/start auth_')) {
-        const code = text.replace('/start auth_', '').trim();
-        const session = authSessions.get(code);
-        if (session && session.expiresAt > Date.now()) {
-          session.status = 'verified';
-          session.telegramUser = {
-            id: from.id,
-            name: `${from.first_name || ''} ${from.last_name || ''}`.trim() || from.username || 'Foydalanuvchi',
-            username: from.username || `user_${from.id}`,
-          };
-          authSessions.set(code, session);
-        }
-      }
+    const expectedSecret = env('TELEGRAM_WEBHOOK_SECRET');
+    const receivedSecret = req.get('x-telegram-bot-api-secret-token') || '';
+    if (!expectedSecret || !receivedSecret || !safeEqual(receivedSecret, expectedSecret)) {
+      return res.status(401).json({ error: 'Unauthorized webhook' });
     }
-    res.json({ ok: true });
+    if (!telegramConfigured()) return res.status(503).json({ error: 'Telegram bot is not configured' });
+
+    const update = req.body;
+    const message = update?.message;
+    if (!message || typeof message.chat?.id !== 'number' || typeof message.from?.id !== 'number') {
+      return res.json({ ok: true });
+    }
+
+    const chatId = message.chat.id as number;
+    const from = message.from;
+    const text = typeof message.text === 'string' ? message.text.trim() : '';
+    const startMatch = text.match(/^\/start(?:@\w+)?(?:\s+auth_(\d{8}))?$/i);
+
+    if (startMatch?.[1]) {
+      const code = startMatch[1];
+      const session = authSessions.get(code);
+      if (session && session.status === 'pending' && session.expiresAt > Date.now()) {
+        session.status = 'verified';
+        session.telegramUser = {
+          id: from.id,
+          name: `${from.first_name || ''} ${from.last_name || ''}`.trim() || from.username || 'Telegram foydalanuvchisi',
+          username: from.username || `user_${from.id}`,
+          photoUrl: undefined,
+        };
+        authSessions.set(code, session);
+        await sendTelegramMessage(chatId, '✅ Telegram hisobingiz BosiTap bilan xavfsiz ulandi. Endi brauzer oynasiga qaytishingiz mumkin.');
+      } else {
+        await sendTelegramMessage(chatId, '⚠️ Ulanish kodi yaroqsiz yoki muddati tugagan. BosiTap’da yangi kod yarating.');
+      }
+      return res.json({ ok: true });
+    }
+
+    if (startMatch || /^\/play(?:@\w+)?$/i.test(text)) {
+      const appUrl = env('APP_URL');
+      await sendTelegramMessage(
+        chatId,
+        '👋 Assalomu alaykum! BosiTap — Bits yig‘ish va yangilanishlar ochish o‘yini. O‘yinni ochish uchun tugmani bosing. Hisobni ulash uchun saytda Telegram orqali kirishni tanlang.',
+        appUrl,
+      );
+    } else if (/^\/help(?:@\w+)?$/i.test(text)) {
+      await sendTelegramMessage(chatId, 'BosiTap buyruqlari:\n/start — boshlash yoki hisobni ulash\n/play — o‘yinni ochish\n/help — yordam', env('APP_URL'));
+    }
+    return res.json({ ok: true });
   });
 
-  // Mount Vite or serve static files
   if (!isProduction) {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -172,14 +254,18 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     app.use(express.static(path.resolve(__dirname, 'dist')));
-    app.get('*', (req: Request, res: Response) => {
+    app.get('*', (_req: Request, res: Response) => {
       res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
     });
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`BosiTap server running on http://0.0.0.0:${PORT}`);
+    console.log(`BosiTap server running on port ${PORT}`);
+    void configureWebhook();
   });
 }
 
-startServer();
+startServer().catch((error) => {
+  console.error('BosiTap server failed to start:', error instanceof Error ? error.message : 'unknown error');
+  process.exitCode = 1;
+});
