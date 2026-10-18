@@ -176,9 +176,6 @@ class TelegramService {
   }
 
   /**
-   * Simulate or verify an auth code immediately
-   */
-  /**
    * Wait for the server to confirm the Telegram webhook session.
    * The browser is never allowed to manufacture a verified Telegram identity.
    */
