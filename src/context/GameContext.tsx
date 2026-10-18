@@ -71,7 +71,13 @@ const GameContext = createContext<GameContextType | null>(null);
 
 export function GameProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<GameState>(() => loadGameState());
-  const [activeTab, setActiveTab] = useState<TabType>(() => {\n    if (typeof window !== 'undefined') {\n      const requestedTab = new URLSearchParams(window.location.search).get('tab');\n      if (requestedTab === 'home' || requestedTab === 'upgrades' || requestedTab === 'daily' || requestedTab === 'stats' || requestedTab === 'leaderboard' || requestedTab === 'settings') return requestedTab;\n    }\n    return 'home';\n  });
+  const [activeTab, setActiveTab] = useState<TabType>(() => {
+    if (typeof window !== 'undefined') {
+      const requestedTab = new URLSearchParams(window.location.search).get('tab');
+      if (requestedTab === 'home' || requestedTab === 'upgrades' || requestedTab === 'daily' || requestedTab === 'stats' || requestedTab === 'leaderboard' || requestedTab === 'settings') return requestedTab;
+    }
+    return 'home';
+  });\n      if (requestedTab === 'home' || requestedTab === 'upgrades' || requestedTab === 'daily' || requestedTab === 'stats' || requestedTab === 'leaderboard' || requestedTab === 'settings') return requestedTab;\n    }\n    return 'home';\n  });
   const [floatingTexts, setFloatingTexts] = useState<FloatingTextItem[]>([]);
   const [offlineReport, setOfflineReport] = useState<OfflineReport | null>(null);
   const [levelUpNotification, setLevelUpNotification] = useState<number | null>(null);
