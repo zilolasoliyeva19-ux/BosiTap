@@ -3,6 +3,8 @@ import { ArrowLeft, KeyRound, LogOut, RefreshCw, ShieldCheck, Users, Bot, Clock3
 
 type Overview = { service: string; serverTime: string; telegramConfigured: boolean; telegramBotUsername: string; activeTelegramAuthSessions: number; note: string };
 const TOKEN_KEY = 'bositap_admin_session_v1';
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\\/+$/, '');
+const apiUrl = (path: string) => API_BASE + path;
 
 export function AdminPage() {
   const [password, setPassword] = useState('');
@@ -12,7 +14,7 @@ export function AdminPage() {
   const [error, setError] = useState('');
 
   const loadOverview = async (session: string) => {
-    const response = await fetch('/api/admin/overview', { headers: { 'x-bositap-admin-session': session }, cache: 'no-store' });
+    const response = await fetch(apiUrl('/api/admin/overview'), { headers: { 'x-bositap-admin-session': session }, cache: 'no-store' });
     if (!response.ok) {
       sessionStorage.removeItem(TOKEN_KEY);
       setToken('');
@@ -30,7 +32,7 @@ export function AdminPage() {
     event.preventDefault();
     setBusy(true); setError('');
     try {
-      const response = await fetch('/api/admin/login', {
+      const response = await fetch(apiUrl('/api/admin/login'), {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ password }), cache: 'no-store',
       });
@@ -45,7 +47,7 @@ export function AdminPage() {
   };
 
   const logout = async () => {
-    if (token) await fetch('/api/admin/logout', { method: 'POST', headers: { 'x-bositap-admin-session': token } }).catch(() => undefined);
+    if (token) await fetch(apiUrl('/api/admin/logout'), { method: 'POST', headers: { 'x-bositap-admin-session': token } }).catch(() => undefined);
     sessionStorage.removeItem(TOKEN_KEY); setToken(''); setOverview(null);
   };
 
