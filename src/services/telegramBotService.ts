@@ -147,7 +147,7 @@ class TelegramService {
    * Check status of auth session
    */
   public async checkAuthSession(code: string): Promise<{ status: 'pending' | 'verified'; telegramUser?: UserProfile } | null> {
-    if (!/^\\d{8}$/.test(code)) return null;
+    if (!/^\d{8}$/.test(code)) return null;
     try {
       const res = await fetch(`/api/telegram/check-auth-session/${encodeURIComponent(code)}`, {
         headers: { Accept: 'application/json' },
