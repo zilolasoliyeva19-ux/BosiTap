@@ -66,7 +66,7 @@ function AppContent() {
 }
 
 export default function App() {
-  if (typeof window !== 'undefined' && window.location.pathname.replace(/\\/+$/, '') === '/admin') return <AdminPage />;
+  if (typeof window !== 'undefined' && window.location.pathname.replace(/\/+$/, '') === '/admin') return <AdminPage />;
   return (
     <GameProvider>
       <AppContent />
