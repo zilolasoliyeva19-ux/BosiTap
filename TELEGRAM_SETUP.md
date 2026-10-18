@@ -7,7 +7,9 @@ Set these in the hosting provider's **Secrets / Environment Variables** panel. D
 - `TELEGRAM_BOT_TOKEN`: the token issued by Telegram's official `@BotFather`.
 - `TELEGRAM_BOT_USERNAME`: your bot username without the leading `@`, for example `BosiTapBot`.
 - `TELEGRAM_WEBHOOK_SECRET`: a unique random string containing only letters, numbers, underscores, and hyphens. Do not reuse the bot token.
-- `APP_URL`: the public HTTPS origin of the deployed app, with no trailing slash. Example: `https://your-app.example`.
+- `APP_URL`: the public HTTPS origin of the **Vercel frontend**, with no trailing slash. It is used for the Mini App button and CORS allowlist.
+- `API_URL`: the public HTTPS origin of the **Railway backend**, with no trailing slash. The Telegram webhook is registered at `${API_URL}/api/telegram/webhook`.
+- `VITE_API_BASE_URL`: set this in Vercel to the same Railway backend origin as `API_URL` (no trailing slash), then redeploy the frontend. This variable is public and contains no secret.
 
 `GEMINI_API_KEY` is unrelated to Telegram authentication.
 
@@ -15,9 +17,11 @@ Set these in the hosting provider's **Secrets / Environment Variables** panel. D
 
 1. Open Telegram and start a chat with `@BotFather`.
 2. Send `/newbot` and follow the instructions. Save the token privately.
-3. Add the four environment variables above to the host's server-side secrets panel.
-4. Deploy/restart the server. On startup it registers the Telegram webhook and bot commands automatically.
-5. Open the BosiTap website and open the profile modal.
+3. Deploy the backend from the BosiTap GitHub repository to Railway, using `npm run build` as the build command and `npm start` as the start command.
+4. Generate a public HTTPS domain for the Railway service. Add `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_USERNAME`, `TELEGRAM_WEBHOOK_SECRET`, `APP_URL`, and `API_URL` to the Railway service variables. Set `API_URL` to the Railway domain and `APP_URL` to the Vercel frontend URL.
+5. In Vercel, add `VITE_API_BASE_URL` with the Railway domain as its value, then redeploy the frontend.
+6. Redeploy/restart the Railway backend after variables are set. On startup it registers the Telegram webhook and bot commands automatically.
+7. Open the BosiTap website and open the profile modal.
 6. Choose **Telegram orqali kirish**, then click **Telegram botni ochish**.
 7. Press **Start** in the bot chat. Return to BosiTap; the profile should link after Telegram confirms the code.
 8. Try `/start`, `/play`, and `/help` in the bot chat.
