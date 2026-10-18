@@ -3,10 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { User, Sparkles, X, ShieldCheck, Check } from 'lucide-react';
 import { useGame } from '../context/GameContext';
 import { translations } from '../localization/translations';
+import { telegramService, TelegramAuthSession } from '../services/telegramBotService';
 
 const AVATAR_OPTIONS = [
   { id: 'avatar_1', color: 'bg-emerald-600', label: 'Emerald' },
@@ -25,12 +26,46 @@ export function AuthModal() {
   const [username, setUsername] = useState(state.profile?.username || '');
   const [selectedAvatar, setSelectedAvatar] = useState(state.profile?.avatarId || 'avatar_1');
   const [error, setError] = useState<string | null>(null);
+  const [telegramSession, setTelegramSession] = useState<TelegramAuthSession | null>(null);
+  const [telegramLoading, setTelegramLoading] = useState(false);
+
+  useEffect(() => {
+    if (!telegramSession) return;
+    let active = true;
+    let checking = false;
+
+    const pollStatus = async () => {
+      if (checking || !active) return;
+      checking = true;
+      try {
+        const result = await telegramService.checkAuthSession(telegramSession.code);
+        if (!active) return;
+        if (result?.status === 'verified' && result.telegramUser) {
+          updateProfile(result.telegramUser);
+          setTelegramSession(null);
+          setIsAuthModalOpen(false);
+        } else if (Date.now() >= telegramSession.expiresAt) {
+          setError('Telegram ulanish kodi muddati tugadi. Yangi kod yarating.');
+          setTelegramSession(null);
+        }
+      } finally {
+        checking = false;
+      }
+    };
+
+    void pollStatus();
+    const interval = window.setInterval(() => void pollStatus(), 1500);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [telegramSession, updateProfile, setIsAuthModalOpen]);
 
   if (!isAuthModalOpen) return null;
 
   const isInitialSetup = !state.profile;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleTelegramLogin = async () => {\n    setTelegramLoading(true);\n    setError(null);\n    try {\n      const session = await telegramService.createAuthSession();\n      setTelegramSession(session);\n    } catch (err) {\n      setError(err instanceof Error ? err.message : 'Telegram bilan ulanishda xatolik.');\n    } finally {\n      setTelegramLoading(false);\n    }\n  };\n\n  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const cleanName = name.trim();
     const cleanUsername = username.trim().replace(/^@/, '');
@@ -170,9 +205,40 @@ export function AuthModal() {
           </button>
         </form>
 
+        <div className="my-4 flex items-center gap-3 text-[10px] uppercase tracking-wider text-[#999999]">
+          <div className="h-px flex-1 bg-[#EAEAEA] dark:bg-[#263147]" />
+          <span>yoki</span>
+          <div className="h-px flex-1 bg-[#EAEAEA] dark:bg-[#263147]" />
+        </div>
+
+        <button
+          type="button"
+          onClick={() => void handleTelegramLogin()}
+          disabled={telegramLoading || Boolean(telegramSession)}
+          className="w-full min-h-11 rounded-xl border border-[#D8E7F8] dark:border-[#263147] bg-[#F0F7FF] dark:bg-[#172338] text-[#145A9E] dark:text-[#93C5FD] font-semibold text-sm flex items-center justify-center gap-2 hover:bg-[#E5F1FF] dark:hover:bg-[#1D2B43] disabled:opacity-60 transition-colors"
+        >
+          <span>✈️</span>
+          <span>{telegramLoading ? 'Ulanish kodi yaratilmoqda…' : telegramSession ? 'Telegram tasdiqlash kutilmoqda…' : 'Telegram orqali kirish'}</span>
+        </button>
+
+        {telegramSession && (
+          <div className="mt-3 p-3 rounded-xl border border-sky-200 dark:border-sky-900 bg-sky-50 dark:bg-sky-950/30 text-center">
+            <p className="text-xs text-sky-900 dark:text-sky-200 mb-2">Botni ochib quyidagi havolani bosing. Telegram hisobingiz tasdiqlangach profil avtomatik ulanadi.</p>
+            <a
+              href={telegramSession.deepLink}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex min-h-10 items-center justify-center px-4 rounded-lg bg-sky-600 hover:bg-sky-700 text-white text-sm font-semibold"
+            >
+              Telegram botni ochish ↗
+            </a>
+            <p className="mt-2 text-[10px] text-sky-800 dark:text-sky-300">Kod 5 daqiqa amal qiladi.</p>
+          </div>
+        )}
+
         <div className="mt-4 pt-3 border-t border-[#F0F0F0] dark:border-[#222C3F] flex items-center justify-center gap-1.5 text-[11px] text-[#777777] dark:text-[#94A3B8]">
           <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-          <span>BosiTap xavfsiz lokal profili</span>
+          <span>Telegram tasdiqlashi serverda tekshiriladi</span>
         </div>
       </div>
     </div>
