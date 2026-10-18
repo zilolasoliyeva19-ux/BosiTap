@@ -3,7 +3,7 @@ import { ArrowLeft, KeyRound, LogOut, RefreshCw, ShieldCheck, Users, Bot, Clock3
 
 type Overview = { service: string; serverTime: string; telegramConfigured: boolean; telegramBotUsername: string; activeTelegramAuthSessions: number; note: string };
 const TOKEN_KEY = 'bositap_admin_session_v1';
-const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\\/+$/, '');
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
 const apiUrl = (path: string) => API_BASE + path;
 
 export function AdminPage() {
