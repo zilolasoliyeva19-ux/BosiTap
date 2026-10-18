@@ -1,0 +1,6 @@
+{
+  "name": "BosiTap",
+  "description": "Minimalist and premium incremental coin clicker game. Tap the coin, earn Bits, unlock upgrades, claim daily streaks, and track real-time progression.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
